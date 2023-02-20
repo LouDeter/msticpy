@@ -57,3 +57,5 @@ typing-extensions>=4.2.0
 urllib3>=1.23
 vt-py>=0.6.1
 vt-graph-api>=2.0
+elasticsearch-dsl>=7.0.0
+opensearch-dsl>=2.0.0
