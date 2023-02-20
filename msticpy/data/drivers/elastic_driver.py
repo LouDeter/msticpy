@@ -4,9 +4,8 @@
 #  license information.
 #  --------------------------------------------------------------------------
 """Elastic Driver class."""
-import json
-from datetime import datetime
-from typing import Any, Dict, Iterable, Optional, Tuple, Union
+import datetime
+from typing import Any, Dict, Optional, Tuple, Union, List
 
 import pandas as pd
 
@@ -18,15 +17,14 @@ from ...common.exceptions import (
     MsticpyParameterError,
 )
 from ...common.utility import check_kwargs, export
-from ..core.query_defns import Formatters
 from .driver_base import DriverBase, QuerySource
 
 try:
     # from elasticsearch import Elasticsearch
     # from elasticsearch_dsl import Search
     from opensearchpy import OpenSearch as Elasticsearch
-    from opensearchpy import AuthenticationException, AuthorizationException
     from opensearchpy import (
+        AuthenticationException,
         ConnectionError,
         ConnectionTimeout,
         TransportError,
@@ -49,13 +47,17 @@ __author__ = "Neil Desai, Ian Hellen"
 ELASTIC_CONNECT_ARGS: Dict[str, str] = {
     "hosts": "(string or List(string)) The host name (default is 'localhost').",
     "api_key": "(Tuple) Authenticate via API key",
-    "basic_auth": "(string or Tuple[str, str]) Login and password for basic auth (use http_auth if you don't know the auth type)",
+    "basic_auth": "(string or Tuple[str, str]) Login and password for basic auth (use "
+    + "http_auth if you don't know the auth type)",
     "http_auth": "(string or Tuple[str, str]) Login and password for standard auth",
     "http_compress": "(Boolean) Enables GZip compression for quest bodies (default is True)",
     "use_ssl": "(Boolean) Enables SSL (default is True)",
-    "verify_certs": "(Boolean) Enable SSL verification for the connection(default is True)",
-    "ssl_assert_hostname": "(Boolean) Enable verification of the hostname of the certificate (default is True)",
-    "ssl_show_warn": "(Boolean) Enable a warning when disabling certificate verificaiton (default is True)",
+    "verify_certs": "(Boolean) Enable SSL verification for the connection (default is "
+    + "True)",
+    "ssl_assert_hostname": "(Boolean) Enable verification of the hostname of the "
+    + "certificate (default is True)",
+    "ssl_show_warn": "(Boolean) Enable a warning when disabling certificate "
+    + "verification (default is True)",
     "ca_certs": "(string) Path to a CA certificate",
     "client_cert": "(string) Path to a client certificate used for authentication",
     "client_key": "(string) Key to open the client cert",
@@ -71,7 +73,7 @@ class ElasticDriver(DriverBase):
         "http_compress": True,
         "use_ssl": True,
     }
-    _ELASTIC_REQUIRED_ARGS = []
+    _ELASTIC_REQUIRED_ARGS: List[str] = []
 
     def __init__(self, **kwargs):
         """Instantiate Elastic Driver."""
@@ -81,7 +83,7 @@ class ElasticDriver(DriverBase):
         self._connected = False
         self._debug = kwargs.get("debug", False)
 
-    def connect(self, connection_str: str = None, **kwargs):
+    def connect(self, connection_str: Optional[str] = None, **kwargs):
         """
         Connect to Elastic cluster.
 
@@ -144,9 +146,9 @@ class ElasticDriver(DriverBase):
 
         missing_args = set(self._ELASTIC_REQUIRED_ARGS) - cs_dict.keys()
         if missing_args or (
-            "api_key" not in cs_dict.keys()
-            and "http_auth" not in cs_dict.keys()
-            and "basic_auth" not in cs_dict.keys()
+            "api_key" not in cs_dict
+            and "http_auth" not in cs_dict
+            and "basic_auth" not in cs_dict
         ):
             raise MsticpyUserConfigError(
                 "One or more connection parameters are missing for Elastic connector",
@@ -161,11 +163,11 @@ class ElasticDriver(DriverBase):
     def query(
         self,
         query: Union[str, Query, Search],
-        query_source: QuerySource = None,
+        query_source: Optional[QuerySource] = None,
         index: Union[str, list] = None,
-        start=None,
-        end=None,
-        size=None,
+        start: Optional[datetime.datetime] = None,
+        end: Optional[datetime.datetime] = None,
+        size: Optional[int] = None,
         **kwargs,
     ) -> Union[pd.DataFrame, Any]:
         """
@@ -176,15 +178,27 @@ class ElasticDriver(DriverBase):
         index : Union[str, list]
             Index to search again
         query : Union[str, dict, Query, Search]
-            Elastic query to execute
-        query_source : QuerySource
+            Elastic query to execute.
+            - string: the query_string query will be used. It's much like lucene search.
+            example: query("event.code:4624")
+            https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-query-string-query.html
+            - dict: it will be considered as a DSL query
+            example: query({"must": [{"match": {"event.code": "4624"}}]})
+            https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl.html
+            - Query: you want to create a query with elastic_dsl Q
+            example:  query(Q("match", event__code="4624"))
+            https://elasticsearch-dsl.readthedocs.io/en/latest/search_dsl.html#queries
+            - Search: you want the full power of the Search object
+            example: query(Search().query(Q("match", winlog__event_id="4624")))
+            https://elasticsearch-dsl.readthedocs.io/en/latest/search_dsl.html#the-search-object
+        query_source : Optional[QuerySource]
             The query definition object
-        start : datetime
+        start : Optional[datetime.datetime]
             The start datetime for the query
-        end : datetime
+        end : Optional[datetime.datetime]
             The end datetime for the query
-        size : int
-            The number of event to get.
+        size : Optional[int]
+            The number of event to get. Default size is 10.
 
         Other Parameters
         ----------------
@@ -205,37 +219,45 @@ class ElasticDriver(DriverBase):
 
         if kwargs.get("table", None) and index is None:
             index = kwargs["table"]
+        if index is None:
+            raise MsticpyParameterError(
+                "Index parameter is missing", parameters="index"
+            )
 
         if isinstance(query, Search):
-            s = query.using(self.service).index(index)
+            search = query.using(self.service).index(index)
         elif isinstance(query, Query):
-            s = Search(using=self.service, index=index).query(query)
+            search = Search(using=self.service, index=index).query(query)
         elif isinstance(query, str):
-            s = Search(using=self.service, index=index).query(
+            search = Search(using=self.service, index=index).query(
                 "query_string", query=query
             )
         elif isinstance(query, dict):
-            s = Search(using=self.service, index=index).from_dict(query)
+            search = Search(using=self.service, index=index).from_dict(query)
         else:
             raise MsticpyParameterError(
-                "Accepted types for query are string, dict, elasticsearch_dsl.Search or elasticsearch_dsl.query.Query"
+                "Accepted types for query are string, dict, elasticsearch_dsl.Search "
+                + "or elasticsearch_dsl.query.Query",
+                parameters="query",
             )
 
         # set number of results
         if size is not None:
-            s = s.extra(size=size)
+            search = search.extra(size=size)
 
         # set date filter
         if start is not None:
             if end is not None:
-                s = s.filter("range", **{"@timestamp": {"gte": start, "lte": end}})
+                search = search.filter(
+                    "range", **{"@timestamp": {"gte": start, "lte": end}}
+                )
             else:
-                s = s.filter("range", **{"@timestamp": {"gte": start}})
+                search = search.filter("range", **{"@timestamp": {"gte": start}})
         else:
             if end is not None:
-                s = s.filter("range", **{"@timestamp": {"lte": end}})
+                search = search.filter("range", **{"@timestamp": {"lte": end}})
 
-        results = s.execute().to_dict()["hits"]["hits"]
+        results = search.execute().to_dict()["hits"]["hits"]
         pd_result = pd.json_normalize(results)
         pd_result.rename(
             {col: col.replace("_source.", "") for col in pd_result.columns},
