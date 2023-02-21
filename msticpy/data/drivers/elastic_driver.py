@@ -75,7 +75,7 @@ class XSearchDriver(DriverBase):
         self._loaded = True
         self._connected = False
         self._debug = kwargs.get("debug", False)
-        self.ConnectionError: Exception = Exception
+        self.ConnectionError = Exception
         self.ConnectionTimeout = Exception
         self.TransportError = Exception
         self.SSLError = Exception
