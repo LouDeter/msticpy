@@ -20,29 +20,23 @@ from ...common.utility import check_kwargs, export
 from .driver_base import DriverBase, QuerySource
 
 try:
-    # from elasticsearch import Elasticsearch
-    # from elasticsearch_dsl import Search
-    from opensearchpy import OpenSearch as Elasticsearch
-    from opensearchpy import (
-        AuthenticationException,
-        ConnectionError,
-        ConnectionTimeout,
-        TransportError,
-        SSLError,
-    )
-    from opensearch_dsl import Search
-    from opensearch_dsl.query import Query
-except ImportError as imp_err:
-    raise MsticpyImportExtraError(
-        "Cannot use this feature without elasticsearch_dsl installed",
-        title="Error importing elasticsearch_dsl",
-        extra="elasticsearch",
-    ) from imp_err
+    import elasticsearch
+    import elasticsearch_dsl
 
+    elasticsearch_lib = True
+except ImportError:
+    elasticsearch_lib = False
+
+try:
+    import opensearchpy
+    import opensearch_dsl
+
+    opensearch_lib = True
+except ImportError:
+    opensearch_lib = False
 
 __version__ = VERSION
 __author__ = "Neil Desai, Ian Hellen"
-
 
 ELASTIC_CONNECT_ARGS: Dict[str, str] = {
     "hosts": "(string or List(string)) The host name (default is 'localhost').",
@@ -64,9 +58,8 @@ ELASTIC_CONNECT_ARGS: Dict[str, str] = {
 }
 
 
-@export
-class ElasticDriver(DriverBase):
-    """Driver to connect and query from Elastic Search."""
+class XSearchDriver(DriverBase):
+    """Driver to connect and query from ElasticSearch or OpenSearch."""
 
     _CONNECT_DEFAULTS: Dict[str, Any] = {
         "hosts": [{"host": "localhost", "port": 9200}],
@@ -76,12 +69,19 @@ class ElasticDriver(DriverBase):
     _ELASTIC_REQUIRED_ARGS: List[str] = []
 
     def __init__(self, **kwargs):
-        """Instantiate Elastic Driver."""
+        """Instantiate Driver."""
         super().__init__(**kwargs)
         self.service = None
         self._loaded = True
         self._connected = False
         self._debug = kwargs.get("debug", False)
+        self.ConnectionError: Exception = Exception
+        self.ConnectionTimeout = Exception
+        self.TransportError = Exception
+        self.SSLError = Exception
+        self.Backend = None
+        self.BESearch = None
+        self.BEQuery = None
 
     def connect(self, connection_str: Optional[str] = None, **kwargs):
         """
@@ -104,16 +104,21 @@ class ElasticDriver(DriverBase):
         Auth args are defined at : https://elasticsearch-py.readthedocs.io/en/latest/api.html
         """
         cs_dict = self._get_connect_args(connection_str, **kwargs)
-        self.service = Elasticsearch(**cs_dict)
+        self.service = self.Backend(**cs_dict)
         try:
             self.service.info()
-        except AuthenticationException as err:
+        except self.AuthenticationException as err:
             raise MsticpyConnectionError(
                 f"Authentication error connecting to Elastic: {err}",
                 title="Elastic authentication",
                 help_uri="https://msticpy.readthedocs.io/en/latest/DataProviders.html",
             ) from err
-        except (ConnectionError, ConnectionTimeout, TransportError, SSLError) as err:
+        except (
+            self.ConnectionError,
+            self.ConnectionTimeout,
+            self.TransportError,
+            self.SSLError,
+        ) as err:
             raise MsticpyConnectionError(
                 f"Error connecting to Elastic: {err}",
                 title="Elastic connection",
@@ -162,7 +167,8 @@ class ElasticDriver(DriverBase):
 
     def query(
         self,
-        query: Union[str, Query, Search],
+        # query: Union[str, Query, Search],
+        query,
         query_source: Optional[QuerySource] = None,
         index: Union[str, list] = None,
         start: Optional[datetime.datetime] = None,
@@ -220,20 +226,18 @@ class ElasticDriver(DriverBase):
         if kwargs.get("table", None) and index is None:
             index = kwargs["table"]
         if index is None:
-            raise MsticpyParameterError(
-                "Index parameter is missing", parameters="index"
-            )
+            raise MsticpyParameterError("Index parameter is missing", parameters="index")
 
-        if isinstance(query, Search):
+        if isinstance(query, self.BESearch):
             search = query.using(self.service).index(index)
-        elif isinstance(query, Query):
-            search = Search(using=self.service, index=index).query(query)
+        elif isinstance(query, self.BEQuery):
+            search = self.BESearch(using=self.service, index=index).query(query)
         elif isinstance(query, str):
-            search = Search(using=self.service, index=index).query(
+            search = self.BESearch(using=self.service, index=index).query(
                 "query_string", query=query
             )
         elif isinstance(query, dict):
-            search = Search(using=self.service, index=index).from_dict(query)
+            search = self.BESearch(using=self.service, index=index).from_dict(query)
         else:
             raise MsticpyParameterError(
                 "Accepted types for query are string, dict, elasticsearch_dsl.Search "
@@ -284,3 +288,53 @@ class ElasticDriver(DriverBase):
 
         """
         raise NotImplementedError(f"Not supported for {self.__class__.__name__}")
+
+
+@export
+class ElasticDriver(XSearchDriver):
+    """
+    ElasticSearch interface for the mutualized XSearchDriver.
+    """
+
+    def __init__(self, **kwargs):
+        """Instantiate Driver."""
+        super().__init__(**kwargs)
+        if not elasticsearch_lib:
+            raise MsticpyImportExtraError(
+                "Cannot use this feature without elasticsearch_dsl installed",
+                title="Error importing elasticsearch_dsl",
+                extra="elasticsearch",
+            )
+        self.ConnectionError = elasticsearch.ConnectionError
+        self.ConnectionTimeout = elasticsearch.ConnectionTimeout
+        self.TransportError = elasticsearch.TransportError
+        self.SSLError = elasticsearch.SSLError
+        self.AuthenticationException = elasticsearch.AuthenticationException
+        self.Backend = elasticsearch.Elasticsearch
+        self.BESearch = elasticsearch_dsl.Search
+        self.BEQuery = elasticsearch_dsl.query.Query
+
+
+@export
+class OpenSearchDriver(XSearchDriver):
+    """
+    OpenSearch interface for the mutualized XSearchDriver.
+    """
+
+    def __init__(self, **kwargs):
+        """Instantiate Driver."""
+        super().__init__(**kwargs)
+        if not opensearch_lib:
+            raise MsticpyImportExtraError(
+                "Cannot use this feature without elasticsearch_dsl installed",
+                title="Error importing elasticsearch_dsl",
+                extra="elasticsearch",
+            )
+        self.ConnectionError = opensearchpy.ConnectionError
+        self.ConnectionTimeout = opensearchpy.ConnectionTimeout
+        self.TransportError = opensearchpy.TransportError
+        self.SSLError = opensearchpy.SSLError
+        self.AuthenticationException = opensearchpy.AuthenticationException
+        self.Backend = opensearchpy.OpenSearch
+        self.BESearch = opensearch_dsl.Search
+        self.BEQuery = opensearch_dsl.query.Query
